@@ -14,7 +14,7 @@ appname="TubeReaver"
 debname="tubereaver"
 
 # Define 'debvers'
-debvers="1.3.3"
+debvers="1.3.4"
 
 # Define 'debarch'
 debarch="all"
