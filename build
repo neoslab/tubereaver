@@ -1,0 +1,154 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+# Define 'devname'
+devname="NeosLab"
+
+# Define 'devmail'
+devmail="support@neoslab.com"
+
+# Define 'appname'
+appname="TubeReaver"
+
+# Define 'debname'
+debname="tubereaver"
+
+# Define 'debvers'
+debvers="1.3.3"
+
+# Define 'debarch'
+debarch="all"
+
+# Define 'execpath'
+execpath="/usr/local/bin/${debname}"
+
+# Define 'execfile'
+execfile="main.py"
+
+# Define 'pathdir'
+pathdir="$(pwd)"
+
+# Define 'pathtmp'
+pathtmp="$(mktemp -d -t ${debname}.XXXXXXXX)"
+
+# Define 'pkgroot'
+pkgroot="${pathtmp}/${debname}"
+
+# Define 'vendorpath'
+vendorpath="${pathdir}/.vendor_nodejs"
+
+# Prepare environment
+rm -rf "${pathdir}/dist"
+rm -rf "${pathtmp}"
+rm -rf "${vendorpath}"
+mkdir -p "${vendorpath}"
+python3 -m pip install --target "${vendorpath}" nodejs-wheel aiohttp
+
+# Build layout
+mkdir -p "${pkgroot}/DEBIAN"
+mkdir -p "${pkgroot}/usr/local/bin"
+mkdir -p "${pkgroot}/usr/local/lib/${debname}"
+mkdir -p "${pkgroot}/usr/share/applications"
+mkdir -p "${pkgroot}/usr/share/pixmaps"
+mkdir -p "${pkgroot}/usr/share/${debname}/icons"
+
+# Create 'control' file
+cat > "${pkgroot}/DEBIAN/control" <<EOF
+Package: ${debname}
+Version: ${debvers}
+Section: utils
+Priority: optional
+Architecture: ${debarch}
+Depends: python3, python3-pyqt6, ffmpeg
+Maintainer: ${devname} <${devmail}>
+Description: ${appname} - YouTube Downloader GUI (source package)
+ ${appname} is a PyQt6-based YouTube downloader that supports
+ single videos, playlists, and audio extraction with FFmpeg.
+ It includes metadata tagging, cover art, and easy batch downloads.
+EOF
+
+# Create 'preinst' file
+cat > "${pkgroot}/DEBIAN/preinst" <<'EOF'
+#!/bin/sh
+set -e
+echo "Clean legacy locations from old packages..."
+rm -f /usr/share/pixmaps/tubereaver.png
+rm -f /usr/share/applications/tubereaver.desktop
+rm -rf /usr/share/tubereaver
+rm -rf /usr/local/lib/tubereaver
+sleep 1s
+exit 0
+EOF
+
+# Create 'postinst' file
+cat > "${pkgroot}/DEBIAN/postinst" <<'EOF'
+#!/bin/sh
+set -e
+echo "Updating desktop launcher..."
+command -v update-desktop-database >/dev/null 2>&1 && update-desktop-database
+sleep 1s
+exit 0
+EOF
+
+# Update files permission
+chmod 0755 "${pkgroot}/DEBIAN/preinst" "${pkgroot}/DEBIAN/postinst"
+
+# Ensure your main.py has a Python3 shebang '#!/usr/bin/env python3'
+install -m 0755 "${execfile}" "${pkgroot}/usr/local/lib/${debname}/${debname}.py"
+
+# Install pytubefix folder
+cp -r pytubefix "${pkgroot}/usr/local/lib/${debname}/"
+
+# Install nodejs_wheel dependency
+cp -r "${vendorpath}/nodejs_wheel" "${pkgroot}/usr/local/lib/${debname}/"
+
+# Install aiohttp dependency (and its transitive deps we care about)
+for pkg in aiohttp aiosignal async_timeout attrs frozenlist multidict yarl propcache aiohappyeyeballs; do
+    if [ -d "${vendorpath}/${pkg}" ]; then
+        cp -r "${vendorpath}/${pkg}" "${pkgroot}/usr/local/lib/${debname}/"
+    fi
+done
+
+# Install package logo
+install -m 0644 "assets/images/${debname}.png" "${pkgroot}/usr/share/pixmaps/${debname}.png"
+
+# Install package icons
+install -m 0644 "assets/icons/error.png" "${pkgroot}/usr/share/${debname}/icons/error.png"
+install -m 0644 "assets/icons/success.png" "${pkgroot}/usr/share/${debname}/icons/success.png"
+
+# Create launcher script
+cat > "${pkgroot}${execpath}" <<EOF
+#!/usr/bin/env bash
+exec python3 /usr/local/lib/${debname}/${debname}.py "\$@"
+EOF
+chmod 0755 "${pkgroot}${execpath}"
+
+# Create desktop launcher
+cat > "${pkgroot}/usr/share/applications/${debname}.desktop" <<EOF
+[Desktop Entry]
+Type=Application
+Name=${appname}
+GenericName=YouTube Downloader
+Comment=PyQt6 GUI to download YouTube videos, playlists, and audio
+Exec=${execpath}
+TryExec=${execpath}
+Icon=/usr/share/pixmaps/${debname}.png
+Terminal=false
+Categories=AudioVideo;Network;Utility;
+StartupNotify=true
+Keywords=youtube;downloader;video;audio;playlist;ffmpeg;
+EOF
+chmod 0644 "${pkgroot}/usr/share/applications/${debname}.desktop"
+
+# Build deb package
+cd "${pathtmp}"
+dpkg-deb --build --root-owner-group "${debname}"
+
+# Output file named with arch that matches control
+mkdir -p "${pathdir}/dist" 
+mv "${pathtmp}/${debname}.deb" "${pathdir}/dist/${debname}_${debvers}_${debarch}.deb"
+echo "Built: ${pathdir}/dist/${debname}_${debvers}_${debarch}.deb"
+cd "${pathdir}"
+
+# Cleanup vendor cache
+rm -rf "${vendorpath}"

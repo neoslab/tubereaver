@@ -1,0 +1,4 @@
+aiohttp
+nodejs-wheel
+pyqt6
+pyqt6-sip
