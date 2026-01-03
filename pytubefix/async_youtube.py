@@ -120,6 +120,17 @@ class AsyncYouTube:
         else:
             self._js = pytubefix.__js__
         return self._js
+
+    async def get_pot(self):
+        if self._pot:
+            return self._pot
+        logger.debug('Running botGuard')
+        try:
+            self._pot = bot_guard.generate_po_token(video_id=self.video_id)
+            logger.debug('PoToken generated successfully')
+        except Exception as e:
+            logger.warning('Unable to run botGuard. Skipping poToken generation, reason: ' + e.__str__())
+        return self._pot
     
     async def get_initial_data(self):
         if self._initial_data:
@@ -251,7 +262,7 @@ class AsyncYouTube:
             elif status == 'LOGIN_REQUIRED':
                 if reason == ('Sign in to confirm your age'):
                     raise exceptions.AgeRestrictedError(video_id=self.video_id)
-                elif reason == ('Sign in to confirm you\'re not a bot'):
+                elif reason == ('Sign in to confirm you’re not a bot'):
                     raise exceptions.BotDetection(video_id=self.video_id)
                 else:
                     raise exceptions.LoginRequired(video_id=self.video_id, reason=reason)
@@ -328,11 +339,8 @@ class AsyncYouTube:
             )
             self._fmt_streams.append(video)
     
-    
-        title = getattr(self, "title", None)
-        length = getattr(self, "length", None)
-        self.stream_monostate.title = title
-        self.stream_monostate.duration = length
+        self.stream_monostate.title = await self.title()
+        self.stream_monostate.duration = await self.length()
     
         return self._fmt_streams
 

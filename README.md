@@ -2,7 +2,7 @@
 
 ![Python Version](https://img.shields.io/badge/python-3.12%2B-blue)
 ![License](https://img.shields.io/badge/license-MIT-green)
-![Platform](https://img.shields.io/badge/platform-Ubuntu%2022.04%2B%20|%20Windows%2010%2B%20|%20macOS-lightgrey)
+![Platform](https://img.shields.io/badge/platform-Ubuntu%2022.04%2B%20)
 
 **TubeReaver** is a powerful and elegant **GUI-based YouTube downloader** built with **PyQt6** and **pytubefix**. It allows downloading **videos, playlists, or audio tracks** with tagging, progress tracking, and full metadata support — all without touching the terminal.
 
@@ -21,7 +21,6 @@
 - Automatic **prefix/suffix** filename options
 - **Preferences dialog** for persistent settings
 - **About dialog** with version info
-- Cross-platform: Ubuntu, Windows, macOS
 
 * * *
 
@@ -52,12 +51,12 @@ sudo apt install -y python3-pyqt6 python3-pyqt6.qt6-tools ffmpeg
 
 ## Installation
 
-Download the latest DEB version from the [releases](https://github.com/neoslab/tubereaver/releases/) section (the current version is v1.3.3) and use the following command:
+Download the latest DEB version from the [releases](https://github.com/neoslab/tubereaver/releases/) section (the current version is v1.3.6) and use the following command:
 
 ```bash
 cd /tmp/
-wget https://github.com/neoslab/tubereaver/releases/download/v1.3.3/tubereaver_1.3.3_all.deb
-sudo dpkg -i tubereaver_1.3.3_all.deb
+wget https://github.com/neoslab/tubereaver/releases/download/v1.3.6/tubereaver_1.3.6_all.deb
+sudo dpkg -i tubereaver_1.3.6_all.deb
 ```
 
 * * *
