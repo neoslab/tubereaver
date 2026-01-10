@@ -63,7 +63,7 @@ from pytubefix import YouTube
 from pytubefix.cli import on_progress as progressdownload
 
 # Define 'VERSION'
-VERSION = "v1.3.6"
+VERSION = "v1.3.7"
 
 # Define 'APPNAME'
 APPNAME = "TubeReaver"
@@ -187,7 +187,6 @@ GENRES: List[str] = [
     "Humour",
     "IDM",
     "Illbient",
-    "Index,Title",
     "Indie",
     "Indie Rock",
     "Industrial",
