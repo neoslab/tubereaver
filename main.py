@@ -63,7 +63,7 @@ from pytubefix import YouTube
 from pytubefix.cli import on_progress as progressdownload
 
 # Define 'VERSION'
-VERSION = "v1.3.7"
+VERSION = "v1.3.8"
 
 # Define 'APPNAME'
 APPNAME = "TubeReaver"
