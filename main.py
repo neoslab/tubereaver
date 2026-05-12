@@ -48,6 +48,7 @@ from PyQt6.QtWidgets import QTabWidget
 from PyQt6.QtCore import QTimer
 from PyQt6.QtWidgets import QVBoxLayout
 from PyQt6.QtWidgets import QWidget
+from typing import cast
 from typing import Dict
 from typing import List
 from typing import Optional
@@ -63,7 +64,7 @@ from pytubefix import YouTube
 from pytubefix.cli import on_progress as progressdownload
 
 # Define 'VERSION'
-VERSION = "v1.3.8"
+VERSION = "v1.3.9"
 
 # Define 'APPNAME'
 APPNAME = "TubeReaver"
@@ -1284,6 +1285,15 @@ class TubeReaver(QWidget):
         Prepares all widgets required to collect user input and show progress.
         """
         super().__init__()
+        iconpath = Path("/usr/share/pixmaps/mediasane.png")
+        if iconpath.is_file():
+            appicon = QIcon(str(iconpath))
+            self.setWindowIcon(appicon)
+            appinstance = QApplication.instance()
+            if appinstance is not None:
+                app = cast(QApplication, appinstance)
+                app.setWindowIcon(appicon)
+
         self.setWindowTitle(f"{APPNAME} {VERSION} - YouTube Downloader GUI")
         self.resize(1100, 760)
 
