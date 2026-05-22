@@ -1,6 +1,6 @@
 # MIT License
 #
-# Copyright (c) 2023 - 2025 Juan Bindez <juanbindez780@gmail.com>
+# Copyright (c) 2023 - 2026 Juan Bindez <juanbindez780@gmail.com>
 #
 # Permission is hereby granted, free of charge, to any person obtaining a copy
 # of this software and associated documentation files (the "Software"), to deal
@@ -93,7 +93,7 @@ class YouTube:
             (Optional) Path to the file where the OAuth and Po tokens will be stored.
             Defaults to None, which means the tokens will be stored in the pytubefix/__cache__ directory.
         :param Callable oauth_verifier:
-            (optional) Verifier to be used for getting oauth tokens. 
+            (optional) Verifier to be used for getting oauth tokens.
             Verification URL and User-Code will be passed to it respectively.
             (if passed, else default verifier will be used)
         """
@@ -623,7 +623,7 @@ class YouTube:
         :rtype: List[Caption]
         """
 
-        innertube_response = InnerTube(
+        innertube = InnerTube(
             client='WEB' if not self.use_oauth else self.client,
             use_oauth=self.use_oauth,
             allow_cache=self.allow_oauth_cache,
@@ -631,7 +631,11 @@ class YouTube:
             oauth_verifier=self.oauth_verifier,
             use_po_token=self.use_po_token,
             po_token_verifier=self.po_token_verifier
-        ).player(self.video_id)
+        )
+
+        innertube.innertube_context.update(self.signature_timestamp)
+
+        innertube_response = innertube.player(video_id=self.video_id)
 
         raw_tracks = (
             innertube_response.get("captions", {})
@@ -907,11 +911,21 @@ class YouTube:
         try:
             contents = self.vid_details['contents']
             results = contents[list(contents.keys())[0]]['results']['results']['contents']
+        except KeyError as e:
+            # `vid_details` is `None`-or-missing-key when the Channel iterator
+            # returns a video whose details payload doesn't include `contents`.
+            # Surface the empty case as PyTubeFixError so callers can decide
+            # how to handle it (likes/dislikes/views catch and return 0 or
+            # raise; see #595 — looping over a Channel previously crashed
+            # mid-iteration on the first video without a details block).
+            raise exceptions.PyTubeFixError(
+                f'Exception: accessing vid_details_content of {self.watch_url} in {self.client}: missing key {e!s}'
+            ) from e
         except Exception as e:
             raise exceptions.PyTubeFixError(
-                    (
-                        f'Exception: accessing vid_details_content of {self.watch_url} in {self.client} and trying to use key in {contents.keys()}'
-                    )
+                (
+                    f'Exception: accessing vid_details_content of {self.watch_url} in {self.client} and trying to use key in {contents.keys()}'
+                )
             ) from e
         return results
 
@@ -1035,7 +1049,7 @@ class YouTube:
 
         :rtype: str
         """
-        
+
         if self.use_oauth == True:
             likes = self.vid_engagement_items()
             if likes != None:
@@ -1068,6 +1082,12 @@ class YouTube:
                         f'Exception: accessing likes of {self.watch_url} in {self.client}'
                     )
             ) from e
+        except exceptions.PyTubeFixError:
+            # vid_details_content raises when the details payload is missing;
+            # skip videos where YouTube didn't return like counts (#595) and
+            # leave callers a deterministic empty value instead of crashing
+            # mid-iteration over a Channel.
+            return ''
         return None
 
     @property

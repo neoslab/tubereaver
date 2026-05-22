@@ -3,8 +3,9 @@
 
 # Import libraries
 import json
+import os
 import re
-import shutil
+import signal
 import socket
 import subprocess
 import sys
@@ -18,10 +19,11 @@ from PyQt6.QtCore import pyqtSignal
 from PyQt6.QtCore import QPropertyAnimation
 from PyQt6.QtCore import Qt
 from PyQt6.QtCore import QThread
+from PyQt6.QtCore import QTimer
 from PyQt6.QtGui import QAction
-from PyQt6.QtGui import QPixmap
-from PyQt6.QtGui import QIcon
 from PyQt6.QtGui import QGuiApplication
+from PyQt6.QtGui import QIcon
+from PyQt6.QtGui import QPixmap
 from PyQt6.QtWidgets import QApplication
 from PyQt6.QtWidgets import QCheckBox
 from PyQt6.QtWidgets import QComboBox
@@ -45,7 +47,6 @@ from PyQt6.QtWidgets import QSpacerItem
 from PyQt6.QtWidgets import QTableWidget
 from PyQt6.QtWidgets import QTableWidgetItem
 from PyQt6.QtWidgets import QTabWidget
-from PyQt6.QtCore import QTimer
 from PyQt6.QtWidgets import QVBoxLayout
 from PyQt6.QtWidgets import QWidget
 from typing import cast
@@ -64,7 +65,7 @@ from pytubefix import YouTube
 from pytubefix.cli import on_progress as progressdownload
 
 # Define 'VERSION'
-VERSION = "v1.3.9"
+VERSION = "v1.4.0"
 
 # Define 'APPNAME'
 APPNAME = "TubeReaver"
@@ -294,9 +295,9 @@ GENRES: List[str] = [
 # Class 'SysUtils'
 class SysUtils:
     """
-    Utility helpers for system-related operations used across the application.
-    Provides functions to format sizes, timestamps, and ensure FFmpeg is available.
-    Designed to be stateless with only static methods.
+    System utilities providing file size formatting and file metadata operations.
+    Includes methods to convert byte sizes to human-readable strings and retrieve file timestamps.
+    Also verifies FFmpeg availability and constructs metadata arguments for audio tagging.
     """
 
     # Function 'unitsize'
@@ -336,13 +337,25 @@ class SysUtils:
     @staticmethod
     def ffmpegnotice() -> None:
         """
-        Ensure that FFmpeg is available in the current environment PATH.
-        If FFmpeg is missing, raise a RuntimeError with basic install hints.
+        Ensure that FFmpeg is available and executable in the current environment.
+        Actually runs 'ffmpeg -version' to verify functionality, not just PATH existence.
+        If FFmpeg is missing or broken, raise a RuntimeError with basic install hints.
         Used before any audio conversion or tagging operations are performed.
         """
-        if shutil.which("ffmpeg") is None:
+        try:
+            # Actually execute ffmpeg to verify it works, not just check PATH
+            result = subprocess.run(
+                ["ffmpeg", "-version"],
+                capture_output=True,
+                text=True,
+                timeout=5
+            )
+            if result.returncode != 0:
+                raise RuntimeError("FFmpeg command failed to execute properly.")
+        except (subprocess.SubprocessError, FileNotFoundError, OSError) as e:
             raise RuntimeError(
-                "FFmpeg not found. Please install FFmpeg to convert/tag audio.\n"
+                f"FFmpeg not found or not functional: {str(e)}\n"
+                "Please install FFmpeg to convert/tag audio.\n"
                 "• macOS:  brew install ffmpeg\n"
                 "• Linux:  sudo apt install ffmpeg\n"
                 "• Windows: choco install ffmpeg (or download from ffmpeg.org)"
@@ -381,9 +394,9 @@ class SysUtils:
 # Class 'TextUtils'
 class TextUtils:
     """
-    Text and filename related helper utilities used by the downloader.
-    Provides functions for cleaning titles, building slugs, and title-casing.
-    All methods are static and side-effect free for easy reuse.
+    Text processing utilities for cleaning and formatting strings.
+    Provides functions to remove parenthetical content, create filesystem-safe slugs.
+    Also includes title case conversion for consistent tag formatting.
     """
 
     # Function 'remparentheses'
@@ -446,9 +459,9 @@ class TextUtils:
 # Class 'ConfigManager'
 class ConfigManager:
     """
-    Simple configuration loader/saver for TubeReaver settings.
-    Uses a plain text key=value file under the user's config directory.
-    Only non-sensitive values are persisted; passwords are kept in memory only.
+    Handles persistent storage of application settings and user preferences.
+    Loads configuration from a JSON file in the user's config directory.
+    Saves settings back to disk while filtering out sensitive information like passwords.
     """
 
     # Function 'load'
@@ -495,9 +508,9 @@ class ConfigManager:
 # Class 'DialogPrefs'
 class DialogPrefs(QDialog):
     """
-    Preferences dialog allowing the user to adjust general and auth settings.
-    Manages output directory, default download mode, and audio and tagging options.
-    Reads from the provided settings dict and exposes updated values on accept.
+    Preferences dialog window for configuring application settings.
+    Provides tabs for general download options and authentication/ OAuth settings.
+    Collects user input and returns updated configuration when accepted.
     """
 
     # Function '__init__'
@@ -647,9 +660,9 @@ class DialogPrefs(QDialog):
 # Class 'DialogAbout'
 class DialogAbout(QDialog):
     """
-    Modal dialog that shows general information about the TubeReaver app.
-    Displays name, version, a short description and a link to the website.
-    Optionally loads and displays an application logo if it can be found.
+    About dialog displaying application information and version details.
+    Shows the application logo, version number, description, and website link.
+    Provides a simple OK button to dismiss the dialog.
     """
 
     # Function '__init__'
@@ -721,17 +734,17 @@ class DialogAbout(QDialog):
 # Class 'DialogCompleted'
 class DialogCompleted(QDialog):
     """
-    Modal dialog that informs the user when downloads have completed.
-    Can represent either a success state or a failure with an error message.
-    Also tries to show a success/error icon if the corresponding file exists.
+    Completion dialog shown after download operations finish.
+    Displays success or error messages depending on the download outcome.
+    Provides visual feedback with appropriate icons and status descriptions.
     """
 
     # Function '__init__'
     def __init__(self, parent: Optional[QWidget], error_message: Optional[str] = None):
         """
-        Build the completion dialog UI with title, icon, message, and close button.
-        The title and icon differ depending on whether an error message is passed.
-        Keeps the content simple so it can be reused after each batch of downloads.
+        Initialize the completion dialog with success or error state.
+        Shows a success icon and message when error_message is None.
+        Shows an error icon and the provided error message when present.
         """
         super().__init__(parent)
         self.setWindowTitle("Download Completed" if not error_message else "Download Failed")
@@ -757,8 +770,7 @@ class DialogCompleted(QDialog):
             iconlabel.setPixmap(
                 pix.scaled(96, 96, Qt.AspectRatioMode.KeepAspectRatio, Qt.TransformationMode.SmoothTransformation))
 
-        title = QLabel(
-            "<b>All downloads finished successfully</b>" if not error_message else "<b>Some downloads failed</b>")
+        title = QLabel("<b>All downloads finished successfully</b>" if not error_message else "<b>Some downloads failed</b>")
         title.setAlignment(Qt.AlignmentFlag.AlignCenter)
         msg = QLabel(
             "All selected files have been downloaded\n"
@@ -785,15 +797,16 @@ class DialogCompleted(QDialog):
         layout.addWidget(btns)
 
     # Function 'showcenter'
-    def showcenter(self) -> None:
+    def showcenter(self):
         """
-        Center the dialog over its parent widget and execute it modally.
-        Adjusts size to fit contents before computing the center position.
-        If no parent is available, it simply executes without repositioning.
+        Center the dialog relative to its parent widget before displaying.
+        Adjusts size automatically to fit content before positioning.
+        Executes the dialog modally after centering is complete.
         """
         self.adjustSize()
-        if self.parent() and isinstance(self.parent(), QWidget):
-            parent: QWidget = self.parent()
+        parent_obj = self.parent()
+        if isinstance(parent_obj, QWidget):
+            parent = cast(QWidget, parent_obj)
             center = parent.geometry().center()
             self.move(center - self.rect().center())
         self.exec()
@@ -803,9 +816,9 @@ class DialogCompleted(QDialog):
 @dataclass
 class DownloadTask:
     """
-    Container dataclass describing a single download job configuration.
-    Holds URL, playlist flag, mode, audio type, paths, and tagging metadata.
-    Instances are passed from the GUI to the DownloadWorker thread.
+    Data container for a single download operation configuration.
+    Stores all parameters needed to download a video or playlist.
+    Includes authentication settings, format options, and metadata tags.
     """
 
     # Define 'useoauth'
@@ -863,9 +876,9 @@ class DownloadTask:
 # Class 'DownloadWorker'
 class DownloadWorker(QThread):
     """
-    Worker thread responsible for fetching and saving YouTube videos/audio.
-    Uses pytubefix to handle streams and emits Qt signals to update the GUI.
-    Can process either a single URL or all items in a playlist transparently.
+    Background worker thread that performs actual YouTube downloads.
+    Handles both single videos and playlists with progress reporting.
+    Performs audio conversion and metadata tagging using FFmpeg when needed.
     """
 
     # Define 'sigprogress'
@@ -889,9 +902,9 @@ class DownloadWorker(QThread):
     # Function '__init__'
     def __init__(self, task: DownloadTask, parent=None):
         """
-        Initialize the worker with a DownloadTask and optional parent object.
-        Stores the task and sets internal error tracking variables to defaults.
-        Signals must be connected by the GUI before invoking the worker logic.
+        Initialize the download worker with a specific download task.
+        Stores the task configuration for use during the download process.
+        Sets up error tracking flags before starting the download operation.
         """
         super().__init__(parent)
         self.task = task
@@ -901,20 +914,19 @@ class DownloadWorker(QThread):
     # Function 'run'
     def run(self) -> None:
         """
-        Qt thread entry point delegating to download logic.
-        Keeps heavy download operations off the main GUI thread.
-        Uses startdownloads() to perform the actual work safely.
+        Start the download process in the background thread.
+        Delegates to either single video or playlist download method.
+        Emits completion signal with success status when finished.
         """
         self.startdownloads()
 
     # Function 'convtomp3'
     @staticmethod
-    def convtomp3(inputfile: Path, meta: Dict[str, str] | None = None, bitrate: str = "192k",
-        samplerate: str = "44100", coverimage: Optional[Path] = None) -> Path:
+    def convtomp3(inputfile: Path, meta: Dict[str, str] | None = None, bitrate: str = "192k", samplerate: str = "44100", coverimage: Optional[Path] = None) -> Path:
         """
-        Convert an input audio file to MP3 format using FFmpeg with metadata.
-        Optionally embeds a cover image and ID3 tags, then deletes the source file.
-        Returns the path to the newly created MP3 file, raising on FFmpeg failure.
+        Convert an audio file to MP3 format with optional metadata and cover art.
+        Uses FFmpeg for high-quality conversion with configurable bitrate and sample rate.
+        Returns the path to the converted MP3 file and removes the original file on success.
         """
         SysUtils.ffmpegnotice()
         outputfile = inputfile.with_suffix(".mp3")
@@ -957,9 +969,9 @@ class DownloadWorker(QThread):
     @staticmethod
     def m4atagsapply(inputfile: Path, meta: Dict[str, str] | None = None, coverimage: Optional[Path] = None) -> Path:
         """
-        Apply metadata and optional cover art to an existing M4A audio file.
-        Uses FFmpeg to create a tagged temporary output file and then replaces the original.
-        Returns the final file path, raising an error if FFmpeg processing fails.
+        Apply metadata tags and cover art to an M4A audio file without re-encoding.
+        Uses FFmpeg to copy the audio stream while adding metadata and attached pictures.
+        Returns the same file path after successful tagging operations.
         """
         SysUtils.ffmpegnotice()
         tmp_out = inputfile.with_suffix(".tagged.m4a")
@@ -992,9 +1004,9 @@ class DownloadWorker(QThread):
     # Function 'metafromtask'
     def metafromtask(self, originaltitle: str | None = None) -> Dict[str, str]:
         """
-        Build a metadata dictionary based on task tag fields and video title.
-        Prefers explicit task tags, falling back to a cleaned version of the title.
-        Only includes non-empty values, suitable for passing into FFmpeg helpers.
+        Build a metadata dictionary from the task's tag fields.
+        Uses custom tags when provided, otherwise extracts from the original title.
+        Returns a dictionary ready for use with FFmpeg metadata parameters.
         """
         meta: Dict[str, str] = {}
         if self.task.tagtitle:
@@ -1016,9 +1028,9 @@ class DownloadWorker(QThread):
     # Function 'coverpath'
     def coverpath(self) -> Optional[Path]:
         """
-        Resolve the cover image path from the task into a validated Path object.
-        Expands user shortcuts like '~' and checks that the file actually exists.
-        Returns None if no valid image path is configured on the task.
+        Validate and return the cover image path from the task configuration.
+        Checks if the specified path exists and is a valid file.
+        Returns None if no cover image is configured or the file is missing.
         """
         path = (self.task.coverimage or "").strip()
         if not path:
@@ -1031,20 +1043,25 @@ class DownloadWorker(QThread):
     # Function 'showprogress'
     def showprogress(self, rowkey: str):
         """
-        Create a progress callback closure bound to a specific table row key.
-        Computes a percentage based on remaining bytes and emits a Qt signal.
-        Falls back to pytubefix's on_progress handler if size information is missing.
+        Create a progress callback function for YouTube download operations.
+        Returns a function that calculates and emits download progress percentages.
+        Handles file size retrieval and prevents division by zero errors.
         """
 
         # Function 'callbackprogress'
         def callbackprogress(stream, chunk, rembytes):
-            """Inner callback used by pytubefix to report per-chunk progress."""
+            """
+            Calculate and emit download progress for a specific stream.
+            Computes completion percentage based on total file size and remaining bytes.
+            Falls back to default progress display when size information is unavailable.
+            """
             try:
                 if self.isInterruptionRequested():
                     raise RuntimeError("Download interrupted by user.")
                 total = getattr(stream, "filesize", None) or getattr(stream, "filesize_approx", None)
                 if not total:
-                    return progressdownload(stream, chunk, rembytes)
+                    progressdownload(stream, chunk, rembytes)
+                    return
                 done = int((1 - (rembytes / total)) * 100)
                 done = max(0, min(100, done))
                 self.sigprogress.emit(rowkey, done)
@@ -1056,9 +1073,9 @@ class DownloadWorker(QThread):
     # Function 'startdownloads'
     def startdownloads(self) -> None:
         """
-        Entry point for running the download task, handling errors and completion.
-        Selects between single-video and playlist workflows based on the task.
-        Always emits the completion signal with success flag and last error text.
+        Orchestrate the download process based on task configuration.
+        Calls either playlist or single video download method as appropriate.
+        Catches exceptions and sets error flags for failed downloads.
         """
         try:
             if self.task.isplaylist:
@@ -1074,9 +1091,9 @@ class DownloadWorker(QThread):
     # Function 'prepareoutput'
     def prepareoutput(self) -> Path:
         """
-        Ensure that the configured output directory exists on disk.
-        Creates intermediate folders if required and returns the resulting Path.
-        Raises no error if the directory already exists or is created successfully.
+        Prepare the output directory for downloaded files.
+        Expands user home directory notation and creates missing directories.
+        Returns the Path object for the validated output directory.
         """
         outdir = Path(self.task.outputdir).expanduser()
         outdir.mkdir(parents=True, exist_ok=True)
@@ -1085,9 +1102,9 @@ class DownloadWorker(QThread):
     # Function 'finalbase'
     def finalbase(self, title: str) -> str:
         """
-        Compute the final base filename for a video or audio item.
-        Combines optional title, artist, prefix, and suffix into a slugified string.
-        Ensures a stable, safe filename for use across all download modes.
+        Construct the final base filename from task settings and video title.
+        Applies prefix and suffix strings after slugifying and cleaning the title.
+        May include artist name at the beginning for better file organization.
         """
         effectivetitle = self.task.tagtitle or title
         cleanedfilename = TextUtils.remparentheses(effectivetitle)
@@ -1111,9 +1128,9 @@ class DownloadWorker(QThread):
     # Function 'runsingle'
     def runsingle(self) -> None:
         """
-        Handle downloading a single YouTube video according to the task options.
-        Selects the appropriate stream (itag, audio-only, or highest resolution).
-        Emits row start, progress, status, and completion signals for the GUI.
+        Download a single video based on the task configuration.
+        Handles itag-specific downloads, highest quality, and audio-only modes.
+        Performs audio conversion and metadata tagging when appropriate.
         """
         if self.isInterruptionRequested():
             raise RuntimeError("Download interrupted by user.")
@@ -1134,49 +1151,63 @@ class DownloadWorker(QThread):
         self.signitemstart.emit(rowkey, title, base or "")
         coverpath = self.coverpath()
 
-        if self.task.mode == "itag" and self.task.itag is not None:
-            stream = yt.streams.get_by_itag(self.task.itag)
-            if not stream:
-                raise RuntimeError(f"itag {self.task.itag} not found for this video.")
+        # Function 'checkinterruption'
+        def checkinterruption() -> None:
+            """
+            Check if the download has been interrupted by user request.
+            Raises a RuntimeError to halt the download process immediately.
+            Called before critical operations to respect user cancellation.
+            """
             if self.isInterruptionRequested():
                 raise RuntimeError("Download interrupted by user.")
-            saved = (
-                stream.download(output_path=str(outdir), filename=base)
-                if base
-                else stream.download(output_path=str(outdir))
-            )
-            finalpath = Path(saved)
+
+        # Function 'downloadstream'
+        def downloadstream(stream_obj) -> Path:
+            """
+            Download a YouTube stream to the output directory with optional filename.
+            Validates that the stream exists before attempting the download.
+            Returns the Path object of the downloaded file or raises an error.
+            """
+            if stream_obj is None:
+                raise RuntimeError("Stream not available")
+            checkinterruption()
+            saved_path = stream_obj.download(output_path=str(outdir), filename=base) if base else stream_obj.download(output_path=str(outdir))
+            if saved_path is None:
+                raise RuntimeError("Download failed: no file path returned")
+            return Path(saved_path)
+
+        if self.task.mode == "itag" and self.task.itag is not None:
+            video_stream = yt.streams.get_by_itag(self.task.itag)
+            if not video_stream:
+                raise RuntimeError(f"itag {self.task.itag} not found for this video.")
+            finalpath = downloadstream(video_stream)
 
         elif self.task.mode == "Audio-only":
-            stream = yt.streams.get_audio_only()
-            if self.isInterruptionRequested():
-                raise RuntimeError("Download interrupted by user.")
-            saved = (
-                stream.download(output_path=str(outdir), filename=base)
-                if base
-                else stream.download(output_path=str(outdir))
-            )
+            audio_stream = yt.streams.get_audio_only()
+            saved_path_obj = downloadstream(audio_stream)
             meta = self.metafromtask(originaltitle=title)
             if self.task.audiotype == "mp3":
-                finalpath = self.convtomp3(Path(saved), meta=meta, coverimage=coverpath)
+                finalpath = self.convtomp3(saved_path_obj, meta=meta, coverimage=coverpath)
             else:
-                finalpath = self.m4atagsapply(Path(saved), meta=meta, coverimage=coverpath)
+                finalpath = self.m4atagsapply(saved_path_obj, meta=meta, coverimage=coverpath)
 
         else:
-            stream = yt.streams.get_highest_resolution()
-            if self.isInterruptionRequested():
-                raise RuntimeError("Download interrupted by user.")
-            saved = (
-                stream.download(output_path=str(outdir), filename=base)
-                if base
-                else stream.download(output_path=str(outdir))
-            )
-            finalpath = Path(saved)
+            higheststream = yt.streams.get_highest_resolution()
+            finalpath = downloadstream(higheststream)
 
-        try:
-            size = finalpath.stat().st_size
-        except (OSError, FileNotFoundError):
-            size = 0
+        # Function 'loadfilesize'
+        def loadfilesize(path: Path) -> int:
+            """
+            Retrieve the file size of a downloaded file in bytes.
+            Handles missing files or permission errors by returning zero.
+            Used for updating total download size statistics.
+            """
+            try:
+                return path.stat().st_size
+            except (OSError, FileNotFoundError):
+                return 0
+
+        size = loadfilesize(finalpath)
         self.sigprogress.emit(rowkey, 100)
         self.sigstatus.emit(rowkey, "Completed")
         self.sigitemdone.emit(rowkey, str(finalpath), size, SysUtils.mtimestring(finalpath))
@@ -1192,11 +1223,71 @@ class DownloadWorker(QThread):
         pl = Playlist(self.task.url)
         coverpath = self.coverpath()
 
-        index = 0
-        for vid in pl.videos:
+        # Function 'runsingle'
+        def checkinterruption() -> bool:
+            """
+            Check for user interruption request during playlist downloads.
+            Sets error flags and returns True if interruption was requested.
+            Allows graceful termination of the playlist processing loop.
+            """
             if self.isInterruptionRequested():
                 self.anyerror = True
                 self.errmsg = "Download interrupted by user."
+                return True
+            return False
+
+        # Function 'downloadstream'
+        def downloadstream(stream_obj, rowkey_str, base_name) -> Optional[Path]:
+            """
+            Download a stream for a playlist item with error handling.
+            Returns None on failure and emits an error signal for the row.
+            Respects interruption requests and validates stream availability.
+            """
+            if stream_obj is None:
+                self.sigitemerror.emit(rowkey_str, "Stream not available")
+                return None
+
+            if checkinterruption():
+                return None
+
+            saved_path = stream_obj.download(output_path=str(outdir),
+                                             filename=base_name) if base_name else stream_obj.download(
+                output_path=str(outdir))
+            if saved_path is None:
+                self.sigitemerror.emit(rowkey_str, "Download failed: no file path returned")
+                return None
+
+            return Path(saved_path)
+
+        # Function 'processaudio'
+        def processaudio(stream_obj, rowkey_str, base_name, title_str) -> Optional[Path]:
+            """
+            Process an audio-only download for a playlist item.
+            Downloads the audio stream and applies conversion/tagging as configured.
+            Returns the final file path or None if processing failed.
+            """
+            saved_path_obj = downloadstream(stream_obj, rowkey_str, base_name)
+            if saved_path_obj is None:
+                return None
+
+            meta = self.metafromtask(originaltitle=title_str)
+            if self.task.audiotype == "mp3":
+                return self.convtomp3(saved_path_obj, meta=meta, coverimage=coverpath)
+            else:
+                return self.m4atagsapply(saved_path_obj, meta=meta, coverimage=coverpath)
+
+        # Function 'processvideo'
+        def processvideo(stream_obj, rowkey_str, base_name) -> Optional[Path]:
+            """
+            Process a video download for a playlist item.
+            Simply downloads the stream without additional processing.
+            Returns the downloaded file path or None on failure.
+            """
+            return downloadstream(stream_obj, rowkey_str, base_name)
+
+        index = 0
+        for vid in pl.videos:
+            if checkinterruption():
                 break
 
             rowkey = f"{vid.watch_url}::{index}"
@@ -1211,24 +1302,12 @@ class DownloadWorker(QThread):
             self.signitemstart.emit(rowkey, title, base or "")
 
             if self.task.mode == "Audio-only":
-                stream = yt.streams.get_audio_only()
-                if self.isInterruptionRequested():
-                    self.anyerror = True
-                    self.errmsg = "Download interrupted by user."
-                    break
-                saved = (
-                    stream.download(output_path=str(outdir), filename=base)
-                    if base
-                    else stream.download(output_path=str(outdir))
-                )
-                meta = self.metafromtask(originaltitle=title)
-                if self.task.audiotype == "mp3":
-                    finalpath = self.convtomp3(Path(saved), meta=meta, coverimage=coverpath)
-                else:
-                    finalpath = self.m4atagsapply(Path(saved), meta=meta, coverimage=coverpath)
+                audio_stream = yt.streams.get_audio_only()
+                finalpath = processaudio(audio_stream, rowkey, base, title)
+
             elif self.task.mode == "itag" and self.task.itag is not None:
-                stream = yt.streams.get_by_itag(self.task.itag)
-                if not stream:
+                video_stream = yt.streams.get_by_itag(self.task.itag)
+                if not video_stream:
                     self.anyerror = True
                     self.sigitemerror.emit(
                         rowkey,
@@ -1236,28 +1315,16 @@ class DownloadWorker(QThread):
                     )
                     index += 1
                     continue
-                if self.isInterruptionRequested():
-                    self.anyerror = True
-                    self.errmsg = "Download interrupted by user."
-                    break
-                saved = (
-                    stream.download(output_path=str(outdir), filename=base)
-                    if base
-                    else stream.download(output_path=str(outdir))
-                )
-                finalpath = Path(saved)
+                finalpath = processvideo(video_stream, rowkey, base)
+
             else:
-                stream = yt.streams.get_highest_resolution()
-                if self.isInterruptionRequested():
-                    self.anyerror = True
-                    self.errmsg = "Download interrupted by user."
-                    break
-                saved = (
-                    stream.download(output_path=str(outdir), filename=base)
-                    if base
-                    else stream.download(output_path=str(outdir))
-                )
-                finalpath = Path(saved)
+                higheststream = yt.streams.get_highest_resolution()
+                finalpath = processvideo(higheststream, rowkey, base)
+
+            # Handle the result
+            if finalpath is None:
+                index += 1
+                continue
 
             try:
                 size = finalpath.stat().st_size
@@ -1272,20 +1339,20 @@ class DownloadWorker(QThread):
 # Class 'TubeReaver'
 class TubeReaver(QWidget):
     """
-    Main application widget providing the TubeReaver GUI interface.
-    Hosts URL input, tagging fields, progress table, and menu actions.
-    Orchestrates download workers and updates the user interface via signals.
+    Main application window for the TubeReaver YouTube downloader.
+    Provides a complete GUI interface for configuring and managing downloads.
+    Handles user interaction, table display, and coordination with background workers.
     """
 
     # Function '__init__'
     def __init__(self):
         """
-        Initialize the main window, menus, controls, and default state.
-        Loads configuration settings, wires up signals, and builds layouts.
-        Prepares all widgets required to collect user input and show progress.
+        Initialize the main application window and all UI components.
+        Sets up the menu bar, form fields, table display, and button controls.
+        Loads saved preferences and prepares the interface for user interaction.
         """
         super().__init__()
-        iconpath = Path("/usr/share/pixmaps/mediasane.png")
+        iconpath = Path("/usr/share/pixmaps/tubereaver.png")
         if iconpath.is_file():
             appicon = QIcon(str(iconpath))
             self.setWindowIcon(appicon)
@@ -1299,19 +1366,22 @@ class TubeReaver(QWidget):
 
         menubar = QMenuBar(self)
         mfile = menubar.addMenu("File")
-        actquit = QAction("Quit", self)
-        actquit.triggered.connect(QApplication.quit)
-        mfile.addAction(actquit)
+        if mfile is not None:
+            actquit = QAction("Quit", self)
+            actquit.triggered.connect(QApplication.quit)
+            mfile.addAction(actquit)
 
         medit = menubar.addMenu("Edit")
-        actprefs = QAction("Preferences", self)
-        actprefs.triggered.connect(self.onprefs)
-        medit.addAction(actprefs)
+        if medit is not None:
+            actprefs = QAction("Preferences", self)
+            actprefs.triggered.connect(self.onprefs)
+            medit.addAction(actprefs)
 
         mhelp = menubar.addMenu("Help")
-        actabout = QAction("About", self)
-        actabout.triggered.connect(self.onabout)
-        mhelp.addAction(actabout)
+        if mhelp is not None:
+            actabout = QAction("About", self)
+            actabout.triggered.connect(self.onabout)
+            mhelp.addAction(actabout)
 
         self.settings: Dict[str, str] = ConfigManager.load()
         self.settings.setdefault("outputdir", str(Path.home() / "Downloads"))
@@ -1329,8 +1399,7 @@ class TubeReaver(QWidget):
         f = QFormLayout()
 
         self.editurl = QLineEdit()
-        self.editurl.setPlaceholderText(
-            "https://www.youtube.com/watch?v=…  or  https://www.youtube.com/playlist?list=…")
+        self.editurl.setPlaceholderText("https://www.youtube.com/watch?v=…  or  https://www.youtube.com/playlist?list=…")
         self.chkplaylist = QCheckBox("Treat as Playlist")
         self.chkplaylist.setToolTip("Check to download all items of the provided playlist URL.")
 
@@ -1419,13 +1488,18 @@ class TubeReaver(QWidget):
         self.table = QTableWidget(0, 6)
         self.table.setHorizontalHeaderLabels(["Title", "URL", "File", "Datetime", "Size", "Progress"])
         header = self.table.horizontalHeader()
-        header.setSectionResizeMode(0, QHeaderView.ResizeMode.Stretch)
-        header.setSectionResizeMode(1, QHeaderView.ResizeMode.Stretch)
-        header.setSectionResizeMode(2, QHeaderView.ResizeMode.Stretch)
-        header.setSectionResizeMode(3, QHeaderView.ResizeMode.ResizeToContents)
-        header.setSectionResizeMode(4, QHeaderView.ResizeMode.ResizeToContents)
-        header.setSectionResizeMode(5, QHeaderView.ResizeMode.ResizeToContents)
-        self.table.verticalHeader().setVisible(False)
+        if header is not None:
+            header.setSectionResizeMode(0, QHeaderView.ResizeMode.Stretch)
+            header.setSectionResizeMode(1, QHeaderView.ResizeMode.Stretch)
+            header.setSectionResizeMode(2, QHeaderView.ResizeMode.Stretch)
+            header.setSectionResizeMode(3, QHeaderView.ResizeMode.ResizeToContents)
+            header.setSectionResizeMode(4, QHeaderView.ResizeMode.ResizeToContents)
+            header.setSectionResizeMode(5, QHeaderView.ResizeMode.ResizeToContents)
+
+        vertical_header = self.table.verticalHeader()
+        if vertical_header is not None:
+            vertical_header.setVisible(False)
+
         self.table.setEditTriggers(QTableWidget.EditTrigger.NoEditTriggers)
         self.table.setSelectionBehavior(QTableWidget.SelectionBehavior.SelectRows)
         self.table.setShowGrid(True)
@@ -1451,26 +1525,21 @@ class TubeReaver(QWidget):
     # Function 'browsecover'
     def browsecover(self) -> None:
         """
-        Open a file picker dialog to choose a cover image for audio tagging.
-        Filters to common image formats but allows selecting any file if needed.
-        When a file is chosen, its path is written into the cover line edit.
+        Open a file dialog to select a cover image for audio tagging.
+        Supports common image formats including PNG, JPEG, WebP, and BMP.
+        Updates the cover image field with the selected file path.
         """
         base = self.editcover.text().strip() or str(Path.home())
-        fname, _ = QFileDialog.getOpenFileName(
-            self,
-            "Choose cover image",
-            base,
-            "Images (*.png *.jpg *.jpeg *.webp *.bmp);;All files (*)",
-        )
+        fname, _ = QFileDialog.getOpenFileName(self, "Choose cover image", base, "Images (*.png *.jpg *.jpeg *.webp *.bmp);;All files (*)")
         if fname:
             self.editcover.setText(fname)
 
     # Function 'taskcollect'
     def taskcollect(self) -> DownloadTask:
         """
-        Build a DownloadTask instance based on the current UI state.
-        Validates that a URL is present and infers playlist mode from content.
-        Reads preferences such as output directory and audio type from settings.
+        Collect all current UI values into a DownloadTask data object.
+        Validates required fields like URL before creating the task.
+        Returns a complete task configuration ready for the download worker.
         """
         url = self.editurl.text().strip()
         if not url:
@@ -1515,9 +1584,9 @@ class TubeReaver(QWidget):
     # Function 'preparetable'
     def preparetable(self) -> None:
         """
-        Reset the progress table and related tracking state before a new run.
-        Clears rows, resets progress bars, total downloaded size, and error text.
-        Ensures the UI reflects a fresh state when starting new downloads.
+        Clear the download status table and reset all tracking variables.
+        Removes all rows, clears progress bars, and resets total download size.
+        Called before starting a new download operation.
         """
         self.table.setRowCount(0)
         self.rows.clear()
@@ -1529,9 +1598,9 @@ class TubeReaver(QWidget):
     # Function 'workersignals'
     def workersignals(self, w: DownloadWorker) -> None:
         """
-        Connect all worker signals to the corresponding handler methods.
-        Binds start, progress, status, done, error, and completion events.
-        Must be called before running the worker to keep the UI in sync.
+        Connect all signals from a DownloadWorker to their handler methods.
+        Sets up progress, status, item completion, and error signal connections.
+        Ensures proper communication between background worker and UI.
         """
         w.signitemstart.connect(self.onrowstart)
         w.sigprogress.connect(self.onrowprogress)
@@ -1543,9 +1612,9 @@ class TubeReaver(QWidget):
     # Function 'workerstart'
     def workerstart(self, task: DownloadTask) -> None:
         """
-        Start a new DownloadWorker for the given task if none is running.
-        Guards against concurrent runs and updates the enabled state of buttons.
-        Immediately invokes the worker's main logic method instead of QThread.run().
+        Start a new download worker thread with the given task.
+        Disables the download button and enables the stop button during download.
+        Prevents starting multiple simultaneous download operations.
         """
         if self.worker and self.worker.isRunning():
             QMessageBox.warning(self, "Busy", "A download is already running.")
@@ -1553,16 +1622,17 @@ class TubeReaver(QWidget):
 
         self.btnstop.setEnabled(True)
         self.btnrun.setEnabled(False)
-        self.worker = DownloadWorker(task, parent=self)
-        self.workersignals(self.worker)
-        self.worker.start()
+        worker = DownloadWorker(task, parent=self)
+        self.worker = worker
+        self.workersignals(worker)
+        worker.start()
 
     # Function 'addrow'
     def addrow(self, rowkey: str, title: str, url: str, saved: str, status: str) -> int:
         """
-        Insert a new row into the progress table and initialize its widgets.
-        Sets columns for title, URL, saved file, and status, plus a QProgressBar.
-        Stores row index and progress bar in dictionaries keyed by rowkey.
+        Add a new row to the download status table for a new item.
+        Inserts the row and stores references to track progress updates.
+        Returns the row index where the new row was added.
         """
         r = self.table.rowCount()
         self.table.insertRow(r)
@@ -1584,9 +1654,9 @@ class TubeReaver(QWidget):
     # Function 'setrowprogress'
     def setrowprogress(self, rowkey: str, pct: int) -> None:
         """
-        Update the progress bar of a specific row based on a row key.
-        Clamps the percentage between 0 and 100 to keep the bar valid.
-        Does nothing if the given row key is unknown or already removed.
+        Update the progress bar for a specific row in the download table.
+        Clamps the percentage value between 0 and 100 for display.
+        Finds the progress bar using the stored rowkey reference.
         """
         bar = self.rowbars.get(rowkey)
         if bar:
@@ -1595,9 +1665,9 @@ class TubeReaver(QWidget):
     # Function 'setrowstatus'
     def setrowstatus(self, rowkey: str, status: str) -> None:
         """
-        Change the status text column for a table row identified by row key.
-        Leaves the table untouched when the row key is not found.
-        Typically used to reflect states like 'Downloading…' or 'Completed'.
+        Update the status text for a specific row in the download table.
+        Changes the status column to reflect current download state.
+        Used for showing "Starting", "Completed", or error messages.
         """
         r = self.rows.get(rowkey)
         if r is not None:
@@ -1606,9 +1676,9 @@ class TubeReaver(QWidget):
     # Function 'setrowsaved'
     def setrowsaved(self, rowkey: str, saved_path: str) -> None:
         """
-        Update the 'Saved File' column for a particular row key.
-        Used after a download finishes to show the full path of the output file.
-        Silently ignores missing rows (e.g., if the table was cleared).
+        Update the saved file path for a completed download row.
+        Stores the actual filesystem path where the file was saved.
+        Allows users to locate downloaded files after completion.
         """
         r = self.rows.get(rowkey)
         if r is not None:
@@ -1617,9 +1687,9 @@ class TubeReaver(QWidget):
     # Function 'setrowmtime'
     def setrowmtime(self, rowkey: str, mtime: str) -> None:
         """
-        Update the 'Mtime' column for a given row identified by row key.
-        Stores the human-readable modification time string in the table cell.
-        Silently ignores unknown rows that may have been cleared earlier.
+        Update the modification timestamp for a completed download row.
+        Shows when the downloaded file was last modified on disk.
+        Helps identify file creation time for organizational purposes.
         """
         r = self.rows.get(rowkey)
         if r is not None:
@@ -1628,9 +1698,9 @@ class TubeReaver(QWidget):
     # Function 'onprefs'
     def onprefs(self) -> None:
         """
-        Open the preferences dialog and apply changes if the user accepts.
-        Saves updated settings to disk and synchronizes relevant UI elements.
-        Also stores any in-memory password value for temporary use.
+        Open the preferences dialog and apply any changes made by the user.
+        Updates the settings dictionary and saves changes to disk.
+        Refreshes the current mode and audio type selectors with new defaults.
         """
         dlg = DialogPrefs(self, self.settings)
         if dlg.exec() == QDialog.DialogCode.Accepted:
@@ -1643,9 +1713,9 @@ class TubeReaver(QWidget):
     # Function 'onabout'
     def onabout(self) -> None:
         """
-        Show the 'About' dialog containing version and website information.
-        Executes the dialog modally and returns only when it is closed.
-        This handler is connected to the Help → About menu action.
+        Open the about dialog to display application information.
+        Shows version number, description, and website link.
+        Provides credits and basic usage information to the user.
         """
         dlg = DialogAbout(self, VERSION, WEBSITEURL)
         dlg.exec()
@@ -1653,9 +1723,9 @@ class TubeReaver(QWidget):
     # Function 'onrun'
     def onrun(self) -> None:
         """
-        Start a new download session based on the current user inputs.
-        Validates the task, resets the progress table, and spawns a worker.
-        Shows a warning message box when required input is missing or invalid.
+        Handle the download button click event.
+        Validates input, collects task configuration, and starts the download.
+        Shows error dialog if input validation fails.
         """
         try:
             task = self.taskcollect()
@@ -1669,9 +1739,9 @@ class TubeReaver(QWidget):
     # Function 'onstop'
     def onstop(self) -> None:
         """
-        Attempt to stop an ongoing download worker in a best-effort manner.
-        Requests interruption, informs the user, and disables the Stop button.
-        Does not forcibly kill the worker but signals that it should exit soon.
+        Handle the stop button click event to cancel ongoing downloads.
+        Requests interruption of the worker thread and shows confirmation.
+        Disables the stop button immediately to prevent multiple stop requests.
         """
         if self.worker and self.worker.isRunning():
             try:
@@ -1688,18 +1758,18 @@ class TubeReaver(QWidget):
     # Function 'onrowstart'
     def onrowstart(self, rowkey: str, title: str, base: str) -> None:
         """
-        Slot called when the worker begins processing a new item.
-        Adds a new row to the table with initial 'Starting' status.
-        Uses the row key to associate future progress and status updates.
+        Handle the signal when a download row starts processing.
+        Adds a new row to the table with initial status information.
+        Sets the starting state before download progress begins.
         """
         self.addrow(rowkey, title, rowkey.split("::")[0], base, "Starting")
 
     # Function 'onrowprogress'
     def onrowprogress(self, rowkey: str, pct: int) -> None:
         """
-        Slot that updates a row's progress bar and status while downloading.
-        Displays a human-friendly 'Downloading…' label alongside the percentage.
-        Called repeatedly by the worker's progress callback function.
+        Handle progress updates for a specific download row.
+        Updates both the progress bar and status text for the row.
+        Shows intermediate "Wait..." status while downloading.
         """
         self.setrowprogress(rowkey, pct)
         self.setrowstatus(rowkey, "Wait…")
@@ -1707,18 +1777,18 @@ class TubeReaver(QWidget):
     # Function 'onrowstatus'
     def onrowstatus(self, rowkey: str, message: str) -> None:
         """
-        Slot that sets a row's status text directly from the worker.
-        Allows the worker to report intermediate or final messages to the user.
-        Used for states like 'Completed' or custom error messages per item.
+        Handle status message updates for a specific download row.
+        Updates the status column with the provided message text.
+        Used for informational updates during the download process.
         """
         self.setrowstatus(rowkey, message)
 
     # Function 'onrowdone'
     def onrowdone(self, rowkey: str, saved_path: str, bytes_size: int, mtime: str) -> None:
         """
-        Slot called when an item finishes downloading successfully.
-        Marks the row as saved, sets progress to 100%, and aggregates total size.
-        Updates the label showing the cumulative downloaded volume.
+        Handle completion of an individual download item.
+        Updates the row with file information and adds to total download size.
+        Marks the item as complete and shows the actual file size.
         """
         self.setrowprogress(rowkey, 100)
         self.setrowmtime(rowkey, mtime)
@@ -1733,9 +1803,9 @@ class TubeReaver(QWidget):
     # Function 'onrowerror'
     def onrowerror(self, rowkey: str, errmsg: str) -> None:
         """
-        Slot invoked when a specific playlist entry fails to download.
-        Records the error message, marks the row status as an error, and clears progress.
-        The most recent error text is also cached for use in the final summary dialog.
+        Handle errors that occur during individual download attempts.
+        Stores the error message and updates the row status accordingly.
+        Sets progress to zero to indicate the item was not completed.
         """
         self._last_error_text = errmsg
         self.setrowstatus(rowkey, f"Error: {errmsg}")
@@ -1744,9 +1814,9 @@ class TubeReaver(QWidget):
     # Function 'onworkerdone'
     def onworkerdone(self, success: bool, errmsg: str) -> None:
         """
-        Slot called when the download worker signals overall completion.
-        Re-enables the Run button, disables Stop, and shows a completion dialog.
-        Afterwards triggers a fade-out animation to clear the table contents.
+        Handle completion of all download worker tasks.
+        Re-enables the download button and disables the stop button.
+        Shows a completion dialog with success or error status.
         """
         self.btnstop.setEnabled(False)
         self.btnrun.setEnabled(True)
@@ -1759,9 +1829,9 @@ class TubeReaver(QWidget):
     # Function 'fadecleaner'
     def fadecleaner(self) -> None:
         """
-        Animate the table with a fade-out effect and clear its contents afterward.
-        Applies a QGraphicsOpacityEffect to smoothly transition to transparency.
-        Once the animation finishes, the table is reset and opacity is restored.
+        Apply a fade-out animation to clear the download table after completion.
+        Creates a smooth visual transition when cleaning up completed downloads.
+        Removes all rows after the animation finishes to reset the interface.
         """
         if self.table.rowCount() == 0:
             return
@@ -1777,7 +1847,11 @@ class TubeReaver(QWidget):
 
         # Function 'fadeafter'
         def fadeafter() -> None:
-            """Clear rows and remove the opacity effect after the fade animation."""
+            """
+            Clear the table rows and remove the opacity effect after animation.
+            Called when the fade animation completes to clean up the interface.
+            Resets the table to an empty state for the next download operation.
+            """
             self.table.setRowCount(0)
             self.table.setGraphicsEffect(None)
 
@@ -1789,24 +1863,23 @@ class TubeReaver(QWidget):
 # Class 'UpdateChecker'
 class UpdateChecker:
     """
-    Check GitHub releases for a newer version.
-    Show a modal popup reusing the About-style layout.
-    Intended to be called once at application startup.
+    Checks for application updates from GitHub releases.
+    Compares current version with latest available release.
+    Shows notification dialog when newer version is available.
     """
 
     # Function '__init__'
-    def __init__(self, parent: QWidget, appname: str, currvers: str, gitrepo: str,
-                 logo_paths: Optional[List[Path]] = None):
+    def __init__(self, parent: QWidget, appname: str, currvers: str, gitrepo: str, logopaths: Optional[List[Path]] = None):
         """
-        Store configuration needed for update checks.
-        Accepts parent widget, app name, current version and repo.
-        Optional logo paths override the default guessed location.
+        Initializes update checker with application metadata and GitHub repository.
+        Stores parent widget reference for dialog display.
+        Configures paths for loading application icon in notification dialog.
         """
         self.parent = parent
         self.appname = appname
         self.currvers = currvers
         self.gitrepo = gitrepo
-        self.logo_paths = logo_paths or [
+        self.logopaths = logopaths or [
             Path(f"/usr/share/pixmaps/{appname.lower()}.png")
         ]
 
@@ -1814,9 +1887,9 @@ class UpdateChecker:
     @staticmethod
     def versionparser(ver: str) -> Tuple[int, ...]:
         """
-        Parse a version string like 'v1.2.3' into integers.
-        Ignores any non-numeric suffixes after the core numbers.
-        Returns a tuple suitable for safe semantic comparison.
+        Parses version string into tuple of integers for comparison.
+        Strips leading 'v' or 'V' characters from version string.
+        Returns tuple with parts converted to integers for lexicographic comparison.
         """
         v = ver.strip()
         if v.startswith(("v", "V")):
@@ -1832,9 +1905,9 @@ class UpdateChecker:
     # Function 'checknewer'
     def checknewer(self, current: str, latest: str) -> bool:
         """
-        Compare two version strings in semantic order.
-        Pads shorter tuples with zeros before comparison.
-        Returns True when latest is strictly greater.
+        Compares two version strings to determine if latest is newer.
+        Normalizes version length by padding with zeros.
+        Returns True if latest version is greater than current version.
         """
         c = self.versionparser(current)
         l = self.versionparser(latest)
@@ -1846,9 +1919,9 @@ class UpdateChecker:
     # Function 'checknotify'
     def checknotify(self, timeout: int = 3):
         """
-        Perform a single update check against GitHub releases.
-        If a newer tag exists, show the update popup dialog.
-        Intended to be called from the main GUI thread.
+        Checks for updates and shows notification if newer version exists.
+        Fetches latest version from GitHub and compares with current.
+        Shows update dialog when newer release is available.
         """
         latest = self.fetchtag(timeout=timeout)
         if not latest:
@@ -1861,9 +1934,9 @@ class UpdateChecker:
     # Function 'fetchtag'
     def fetchtag(self, timeout: int = 3) -> Optional[str]:
         """
-        Call GitHub API to obtain the latest release tag.
-        Uses /repos/{repo}/releases/latest with a short timeout.
-        Returns the tag name string or None on any failure.
+        Fetches latest release tag name from GitHub API.
+        Makes HTTP request with timeout to prevent UI freezing.
+        Returns tag name string or None if request fails.
         """
         try:
             url = f"https://api.github.com/repos/{self.gitrepo}/releases/latest"
@@ -1886,9 +1959,9 @@ class UpdateChecker:
     # Function 'showupdate'
     def showupdate(self, latest: str, url: str):
         """
-        Build and display the update popup dialog.
-        Reuses the About layout with logo, text and link.
-        Blocks until user closes the window or presses OK.
+        Displays update notification dialog with version information.
+        Shows current version, latest version, and download link.
+        Provides OK button to dismiss dialog after reading.
         """
         dlg = QDialog(self.parent)
         dlg.setWindowTitle("Update Available")
@@ -1899,7 +1972,7 @@ class UpdateChecker:
         logolabel.setAlignment(Qt.AlignmentFlag.AlignCenter)
 
         pix: Optional[QPixmap] = None
-        for pth in self.logo_paths:
+        for pth in self.logopaths:
             if pth.is_file():
                 tmp = QPixmap(str(pth))
                 if not tmp.isNull():
@@ -1956,19 +2029,21 @@ class UpdateChecker:
 # Class 'AppEntry'
 class AppEntry:
     """
-    Application bootstrapper encapsulating the Qt event loop startup logic.
-    Creates a QApplication instance, instantiates the main TubeReaver window.
-    Provides a single static main() entry point for running the GUI application.
+    Application entry point that initializes and launches the GUI.
+    Sets up Qt application environment, creates main window, and starts event loop.
+    Performs initial configuration loading and optional update checking.
     """
 
     # Function "main"
     @staticmethod
     def main() -> None:
         """
-        Initialize QApplication, build the main window, and start the event loop.
-        Ensures command-line arguments are passed through to Qt as usual.
-        Exits the process with the return code from app.exec().
+        Main entry point for the TubeReaver application.
+        Configures Qt environment, creates the main window, and starts the event loop.
+        Initializes the update checker to run shortly after application startup.
         """
+        os.environ["QT_LOGGING_RULES"] = "qt.qpa.*=false"
+        signal.signal(signal.SIGINT, signal.SIG_DFL)
         app = QApplication(sys.argv)
 
         if hasattr(QGuiApplication, "setDesktopFileName"):
@@ -1979,13 +2054,12 @@ class AppEntry:
 
         win = TubeReaver()
         win.show()
-
         checker = UpdateChecker(
             parent=win,
             appname=APPNAME,
             currvers=VERSION,
             gitrepo="neoslab/tubereaver",
-            logo_paths=[Path("/usr/share/pixmaps/tubereaver.png")],
+            logopaths=[Path("/usr/share/pixmaps/tubereaver.png")],
         )
         win.updatecheck = checker
         QTimer.singleShot(1500, checker.checknotify)
