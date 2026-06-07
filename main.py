@@ -60,12 +60,12 @@ from urllib.request import Request
 from urllib.request import urlopen
 
 # Import local packages
-from pytubefix import Playlist
-from pytubefix import YouTube
-from pytubefix.cli import on_progress as progressdownload
+from pytube import Playlist
+from pytube import YouTube
+from pytube.cli import on_progress as progressdownload
 
 # Define 'VERSION'
-VERSION = "v1.4.1"
+VERSION = "v1.4.2"
 
 # Define 'APPNAME'
 APPNAME = "TubeReaver"

@@ -14,7 +14,7 @@ appname="TubeReaver"
 debname="tubereaver"
 
 # Define 'debvers'
-debvers="1.4.1"
+debvers="1.4.2"
 
 # Define 'debarch'
 debarch="all"
@@ -96,15 +96,17 @@ chmod 0755 "${pkgroot}/DEBIAN/preinst" "${pkgroot}/DEBIAN/postinst"
 # Ensure your main.py has a Python3 shebang '#!/usr/bin/env python3'
 install -m 0755 "${execfile}" "${pkgroot}/usr/local/lib/${debname}/${debname}.py"
 
-# Install pytubefix folder
-cp -r pytubefix "${pkgroot}/usr/local/lib/${debname}/"
+# Install pytube folder
+cp -r pytube "${pkgroot}/usr/local/lib/${debname}/"
 
 # Install nodejs_wheel dependency
 cp -r "${vendorpath}/nodejs_wheel" "${pkgroot}/usr/local/lib/${debname}/"
 
 # Install aiohttp dependency (and its transitive deps we care about)
-for pkg in aiohttp aiosignal async_timeout attrs frozenlist multidict yarl propcache aiohappyeyeballs; do
-    if [ -d "${vendorpath}/${pkg}" ]; then
+for pkg in aiohttp aiosignal async_timeout attrs frozenlist multidict yarl propcache aiohappyeyeballs;
+do
+    if [ -d "${vendorpath}/${pkg}" ];
+    then
         cp -r "${vendorpath}/${pkg}" "${pkgroot}/usr/local/lib/${debname}/"
     fi
 done
