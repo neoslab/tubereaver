@@ -2,7 +2,6 @@
 
 ![Python Version](https://img.shields.io/badge/python-3.12%2B-blue)
 ![License](https://img.shields.io/badge/license-MIT-green)
-![Platform](https://img.shields.io/badge/platform-Ubuntu%2022.04%2B%20)
 
 **TubeReaver** is a powerful and elegant **GUI-based YouTube downloader** built with **PyQt6** and **pytubefix**. It allows downloading **videos, playlists, or audio tracks** with tagging, progress tracking, and full metadata support — all without touching the terminal.
 
