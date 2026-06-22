@@ -65,7 +65,7 @@ from pytube import YouTube
 from pytube.cli import on_progress as progressdownload
 
 # Define 'VERSION'
-VERSION = "v1.4.2"
+VERSION = "v1.4.3"
 
 # Define 'APPNAME'
 APPNAME = "TubeReaver"
